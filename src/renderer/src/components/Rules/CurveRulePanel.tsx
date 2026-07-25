@@ -22,9 +22,12 @@ const CurveRulePanel:FC<CurveRulePanelProps>= (props) => {
   // 增加淹没线的表头
   const [newHeaders, setNewHeaders] = useState<string[]>(sheetData?.headers ?? [])
 
-  // sheetData 变化时重置 headers
+  // sheetData 变化时重置所有计算状态
   useEffect(() => {
-    setNewHeaders(sheetData?.headers ?? [])
+    setNewHeaders([])
+    setPreviewRows([])
+    setResultMap(new Map())
+    setSelectedKey('')
   }, [sheetData])
 
   useEffect(()=>{
@@ -156,16 +159,18 @@ const CurveRulePanel:FC<CurveRulePanelProps>= (props) => {
             }
           }
           // 回水终点（t/T 精度对齐在 calculateFinish 内部处理）
-          const finish = calculateFinish(S1, S2, B, t, T);
-          const result = {
-            '距坝里程': finish,
-            '断面号': val+'处理终点',
-            "多年平均水面线": B,
+          if (S1 != null && S2 != null && t != null && T != null && pointIndex != null) {
+            const finish = calculateFinish(S1, S2, B, t, T);
+            const result = {
+              '距坝里程': finish,
+              '断面号': val+'处理终点',
+              "多年平均水面线": B,
+            }
+            finishList.push({
+              id: pointIndex,
+              result: result
+            })
           }
-          finishList.push({
-            id: pointIndex,
-            result: result
-          })
         })
         // 按照result['距坝里程'] 插入
         const sortedFinishList = [...finishList].sort((a: any, b: any) => Number(a.result['距坝里程']) - Number(b.result['距坝里程']))
@@ -333,35 +338,37 @@ const CurveRulePanel:FC<CurveRulePanelProps>= (props) => {
         </div>
       )}
 
-      <div style={styles.container}>
-        <div style={styles.tableWrapper}>
-          <table style={styles.table}>
-            <thead>
-              <tr>
-                {newHeaders?.map((h) => (
-                  <th key={h} style={styles.th}>
-                    {h}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {previewRows.map((row, i) => (
-                <tr key={i} style={i % 2 === 0 ? styles.rowEven : styles.rowOdd}>
+      {previewRows.length > 0 && (
+        <div style={styles.container}>
+          <div style={styles.tableWrapper}>
+            <table style={styles.table}>
+              <thead>
+                <tr>
                   {newHeaders?.map((h) => (
-                    <td key={h} style={styles.td}>
-                      {row[h] == null ? '' : String(row[h])}
-                    </td>
+                    <th key={h} style={styles.th}>
+                      {h}
+                    </th>
                   ))}
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {previewRows.map((row, i) => (
+                  <tr key={i} style={i % 2 === 0 ? styles.rowEven : styles.rowOdd}>
+                    {newHeaders?.map((h) => (
+                      <td key={h} style={styles.td}>
+                        {row[h] == null ? '' : String(row[h])}
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div style={styles.hint}>
+            预览前 {previewRows.length} 行，共 {sheetData?.rows.length} 行 · {newHeaders?.length} 列
+          </div>
         </div>
-        <div style={styles.hint}>
-          预览前 {previewRows.length} 行，共 {sheetData?.rows.length} 行 · {newHeaders?.length} 列
-        </div>
-      </div>
+      )}
     </>
   )
 }

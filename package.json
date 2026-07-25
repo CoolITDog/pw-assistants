@@ -1,6 +1,6 @@
 {
   "name": "excel-processor",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "description": "Excel数据处理桌面应用",
   "main": "out/main/index.js",
   "scripts": {
@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "decimal.js": "^10.6.0",
+    "electron-store": "^8.2.0",
     "exceljs": "^4.4.0",
     "xlsx": "^0.18.5"
   },

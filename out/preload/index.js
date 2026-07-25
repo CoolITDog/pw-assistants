@@ -81,7 +81,7 @@ const electronAPI = {
 const api = {
   openFile: () => electron.ipcRenderer.invoke("file:open"),
   readSheet: (filePath, sheetName) => electron.ipcRenderer.invoke("file:readSheet", filePath, sheetName),
-  saveFile: () => electron.ipcRenderer.invoke("export:saveFile"),
+  saveFile: (defaultFileName) => electron.ipcRenderer.invoke("export:saveFile", defaultFileName),
   exportExcel: (filePath, data) => electron.ipcRenderer.invoke("export:excel", filePath, data),
   exportMultiSheet: (filePath, data) => electron.ipcRenderer.invoke("export:multiSheet", filePath, data),
   openDirectory: (dirPath) => electron.ipcRenderer.invoke("export:openDirectory", dirPath),
@@ -89,7 +89,13 @@ const api = {
   readSheetWithMatchCheck: (filePath, sheetName, expectedHeaders) => electron.ipcRenderer.invoke("file:readSheetWithMatchCheck", filePath, sheetName, expectedHeaders),
   saveMappingTemplate: (template) => electron.ipcRenderer.invoke("file:saveMappingTemplate", template),
   loadMappingTemplates: () => electron.ipcRenderer.invoke("file:loadMappingTemplates"),
-  applyMappingTemplate: (sourceHeaders, templateId) => electron.ipcRenderer.invoke("file:applyMappingTemplate", sourceHeaders, templateId)
+  applyMappingTemplate: (sourceHeaders, templateId) => electron.ipcRenderer.invoke("file:applyMappingTemplate", sourceHeaders, templateId),
+  // 配置管理 - 期望列名列表
+  getExpectedHeaders: (sheetName) => electron.ipcRenderer.invoke("config:getExpectedHeaders", sheetName),
+  hasSheetConfig: (sheetName) => electron.ipcRenderer.invoke("config:hasSheetConfig", sheetName),
+  setExpectedHeaders: (headers, sheetName) => electron.ipcRenderer.invoke("config:setExpectedHeaders", headers, sheetName),
+  resetExpectedHeaders: () => electron.ipcRenderer.invoke("config:resetExpectedHeaders"),
+  getDefaultExpectedHeaders: () => electron.ipcRenderer.invoke("config:getDefaultExpectedHeaders")
 };
 if (process.contextIsolated) {
   try {

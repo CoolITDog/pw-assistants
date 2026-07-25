@@ -6,6 +6,39 @@ import { PreviewPanel } from './components/PreviewPanel'
 import { ExportButton } from './components/ExportButton'
 import RulePanel from './components/RulePanel'
 
+/**
+ * 根据映射规则重命名 sheetData 中的列名
+ * 将源列名替换为目标列名，使后续计算逻辑可以统一使用目标列名
+ */
+function applyMappingsToSheetData(sheetData: SheetData, mappings: ColumnMapping[]): SheetData {
+  if (mappings.length === 0) return sheetData
+
+  // 构建 sourceColumn -> outputName 的映射表
+  const renameMap = new Map<string, string>()
+  for (const m of mappings) {
+    if (m.sourceColumn && m.outputName && m.sourceColumn !== m.outputName) {
+      renameMap.set(m.sourceColumn, m.outputName)
+    }
+  }
+
+  if (renameMap.size === 0) return sheetData
+
+  // 重命名 headers
+  const newHeaders = sheetData.headers.map(h => renameMap.get(h) ?? h)
+
+  // 重命名 rows 中的 key
+  const newRows = sheetData.rows.map(row => {
+    const newRow: Record<string, unknown> = {}
+    for (const [key, value] of Object.entries(row)) {
+      const newKey = renameMap.get(key) ?? key
+      newRow[newKey] = value
+    }
+    return newRow
+  })
+
+  return { headers: newHeaders, rows: newRows }
+}
+
 function App(): React.JSX.Element {
   // ── File state ──────────────────────────────────────────────────────────
   const [filePath, setFilePath] = useState<string | null>(null)
@@ -20,6 +53,12 @@ function App(): React.JSX.Element {
   const [curveRules, setCurveRules] = useState<CurveRule[]>([])
 
   // ── Derived preview data ────────────────────────────────────────────────
+  // 当有映射时，将 sheetData 中的列名按映射规则重命名
+  const mappedSheetData = useMemo<SheetData | null>(() => {
+    if (!sheetData) return null
+    return applyMappingsToSheetData(sheetData, mappings)
+  }, [sheetData, mappings])
+
   const previewData = useMemo<ExportData | null>(() => {
     if (!sheetData || mappings.length === 0) return null
     try {
@@ -32,6 +71,12 @@ function App(): React.JSX.Element {
   // ── Handlers ────────────────────────────────────────────────────────────
   async function handleFileOpen(): Promise<void> {
     setFileError(null)
+    // 清空所有旧状态，确保重复导入同名文件时数据被刷新
+    setSheetData(null)
+    setMappings([])
+    setFilters([])
+    setCurveRules([])
+    setResultData(null)
     try {
       const result = await window.api.openFile()
       if (!result) return
@@ -43,9 +88,6 @@ function App(): React.JSX.Element {
         const data = await window.api.readSheet(result.filePath, sheet)
         console.log('导入数据：', data);
         setSheetData(data)
-        setMappings([])
-        setFilters([])
-        setCurveRules([])
       }
     } catch (err: unknown) {
       setFileError(err instanceof Error ? err.message : String(err))
@@ -55,14 +97,16 @@ function App(): React.JSX.Element {
   async function handleSheetChange(sheet: string): Promise<void> {
     setFileError(null)
     setSelectedSheet(sheet)
+    // 切换 sheet 时清空计算结果和规则状态
+    setMappings([])
+    setFilters([])
+    setCurveRules([])
+    setResultData(null)
     if (!filePath) return
     try {
       const data = await window.api.readSheet(filePath, sheet)
       console.log('切换的sheet数据：', data);
       setSheetData(data)
-      setMappings([])
-      setFilters([])
-      setCurveRules([])
     } catch (err: unknown) {
       setFileError(err instanceof Error ? err.message : String(err))
     }
@@ -86,6 +130,7 @@ function App(): React.JSX.Element {
               sheetData={sheetData}
               onFileOpen={handleFileOpen}
               onSheetChange={handleSheetChange}
+              onMappingsConfirm={setMappings}
             />
             {fileError && <div style={styles.errorMsg}>❌ {fileError}</div>}
           </section>
@@ -93,21 +138,21 @@ function App(): React.JSX.Element {
           <section style={styles.card}>
             <h2 style={styles.cardTitle}>2. 配置规则</h2>
             <RulePanel
-              headers={sheetData?.headers ?? []}
+              headers={mappedSheetData?.headers ?? []}
               mappings={mappings}
               filters={filters}
               curveRules={curveRules}
               onMappingsChange={setMappings}
               onFiltersChange={setFilters}
               onCurveRulesChange={setCurveRules}
-              sheetData={sheetData}
+              sheetData={mappedSheetData}
               resultData={resultData}
               setResultData={setResultData}
             />
           </section>
            <section style={styles.card}>
             <h2 style={styles.cardTitle}>3. 导出</h2>
-            <ExportButton data={previewData} resultData={resultData} />
+            <ExportButton data={previewData} resultData={resultData} sheetName={selectedSheet} />
           </section>
         </div>
 

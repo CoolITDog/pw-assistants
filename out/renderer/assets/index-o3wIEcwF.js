@@ -7058,19 +7058,836 @@ function processSheet(sheetData, ruleConfig) {
   const rows = mappedRows.map((row) => headers.map((h) => row[h] ?? null));
   return { headers, rows };
 }
+function validateMappings(mappings, sourceHeaders, targetHeaders, requiredColumns = []) {
+  const errors = [];
+  if (requiredColumns.length > 0) {
+    const mappedTargets = new Set(
+      mappings.map((m2) => m2.outputName).filter(Boolean)
+    );
+    for (const requiredCol of requiredColumns) {
+      if (!mappedTargets.has(requiredCol)) {
+        errors.push({
+          type: "required_column_missing",
+          message: `必需列 "${requiredCol}" 未映射`,
+          targetColumn: requiredCol
+        });
+      }
+    }
+  }
+  const sourceToTargetsMap = /* @__PURE__ */ new Map();
+  for (const mapping of mappings) {
+    if (!mapping.sourceColumn) continue;
+    const existing = sourceToTargetsMap.get(mapping.sourceColumn) || [];
+    existing.push(mapping.outputName);
+    sourceToTargetsMap.set(mapping.sourceColumn, existing);
+  }
+  for (const [sourceColumn, targetColumns] of sourceToTargetsMap) {
+    if (targetColumns.length > 1) {
+      errors.push({
+        type: "source_conflict",
+        message: `源列 "${sourceColumn}" 映射到了多个目标列：${targetColumns.join(", ")}`,
+        sourceColumn,
+        relatedColumns: targetColumns
+      });
+    }
+  }
+  const targetColumnCounts = /* @__PURE__ */ new Map();
+  for (const mapping of mappings) {
+    if (!mapping.outputName) continue;
+    const existing = targetColumnCounts.get(mapping.outputName) || [];
+    existing.push(mapping.sourceColumn || "(计算列)");
+    targetColumnCounts.set(mapping.outputName, existing);
+  }
+  for (const [targetColumn, sourceColumns] of targetColumnCounts) {
+    if (sourceColumns.length > 1) {
+      errors.push({
+        type: "duplicate_target",
+        message: `目标列 "${targetColumn}" 被多个源列映射：${sourceColumns.join(", ")}`,
+        targetColumn,
+        relatedColumns: sourceColumns
+      });
+    }
+  }
+  if (sourceHeaders.length > 0) {
+    const sourceHeaderSet = new Set(sourceHeaders);
+    for (const mapping of mappings) {
+      if (mapping.sourceColumn && !sourceHeaderSet.has(mapping.sourceColumn)) {
+        errors.push({
+          type: "source_not_found",
+          message: `源列 "${mapping.sourceColumn}" 不存在于源文件列名中`,
+          sourceColumn: mapping.sourceColumn
+        });
+      }
+    }
+  }
+  if (targetHeaders.length > 0) {
+    const targetHeaderSet = new Set(targetHeaders);
+    for (const mapping of mappings) {
+      if (mapping.outputName && !targetHeaderSet.has(mapping.outputName)) {
+        errors.push({
+          type: "target_not_found",
+          message: `目标列 "${mapping.outputName}" 不在目标列名列表中`,
+          targetColumn: mapping.outputName
+        });
+      }
+    }
+  }
+  return {
+    isValid: errors.length === 0,
+    errors
+  };
+}
+function canConfirmMappings(result) {
+  const criticalErrors = result.errors.filter(
+    (e) => e.type === "required_column_missing" || e.type === "source_conflict"
+  );
+  return criticalErrors.length === 0;
+}
+function ManualMappingDialog({
+  sourceHeaders,
+  targetHeaders,
+  presetMappings = [],
+  requiredColumns = [],
+  onConfirm,
+  onCancel,
+  visible
+}) {
+  const [mappings, setMappings] = reactExports.useState([]);
+  const [draggedSource, setDraggedSource] = reactExports.useState(null);
+  const [focusedTarget, setFocusedTarget] = reactExports.useState(null);
+  const [validationResult, setValidationResult] = reactExports.useState({ isValid: true, errors: [] });
+  const confirmBtnRef = reactExports.useRef(null);
+  const sourceColumnRefs = reactExports.useRef(/* @__PURE__ */ new Map());
+  const targetColumnRefs = reactExports.useRef(/* @__PURE__ */ new Map());
+  reactExports.useEffect(() => {
+    if (!visible) return;
+    const initialMappings = [];
+    if (presetMappings.length > 0) {
+      presetMappings.forEach((pm) => {
+        if (pm.sourceColumn) {
+          initialMappings.push({
+            sourceColumn: pm.sourceColumn,
+            targetColumn: pm.outputName
+          });
+        }
+      });
+    } else {
+      sourceHeaders.forEach((source) => {
+        const exactMatch = targetHeaders.find((t2) => t2 === source);
+        if (exactMatch) {
+          initialMappings.push({
+            sourceColumn: source,
+            targetColumn: exactMatch
+          });
+        }
+      });
+    }
+    setMappings(initialMappings);
+  }, [visible, sourceHeaders, targetHeaders, presetMappings]);
+  reactExports.useEffect(() => {
+    const columnMappings = mappings.map((m2, index) => ({
+      id: `mapping-${index}`,
+      sourceColumn: m2.sourceColumn,
+      outputName: m2.targetColumn,
+      order: index
+    }));
+    const result = validateMappings(
+      columnMappings,
+      sourceHeaders,
+      targetHeaders,
+      requiredColumns
+    );
+    setValidationResult(result);
+  }, [mappings, sourceHeaders, targetHeaders, requiredColumns]);
+  const handleTargetSelect = reactExports.useCallback((sourceColumn, targetColumn) => {
+    setMappings((prev) => {
+      const existingIndex = prev.findIndex((m2) => m2.sourceColumn === sourceColumn);
+      if (existingIndex >= 0) {
+        const updated = [...prev];
+        updated[existingIndex] = { sourceColumn, targetColumn };
+        return updated;
+      } else {
+        return [...prev, { sourceColumn, targetColumn }];
+      }
+    });
+  }, []);
+  const handleRemoveMapping = reactExports.useCallback((sourceColumn) => {
+    setMappings((prev) => prev.filter((m2) => m2.sourceColumn !== sourceColumn));
+  }, []);
+  const handleDragStart = reactExports.useCallback((sourceColumn) => {
+    setDraggedSource(sourceColumn);
+  }, []);
+  const handleDragEnd = reactExports.useCallback(() => {
+    setDraggedSource(null);
+  }, []);
+  const handleDrop = reactExports.useCallback((targetColumn) => {
+    if (draggedSource) {
+      handleTargetSelect(draggedSource, targetColumn);
+      setDraggedSource(null);
+    }
+  }, [draggedSource, handleTargetSelect]);
+  reactExports.useEffect(() => {
+    if (!visible) return;
+    const handleKeyDown = (e) => {
+      if (e.key === "Escape") {
+        onCancel();
+      } else if (e.key === "Tab") ;
+      else if (e.key === "Enter" && e.ctrlKey) {
+        handleConfirm();
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [visible, mappings]);
+  const handleConfirm = reactExports.useCallback(() => {
+    const columnMappings = mappings.map((m2, index) => ({
+      id: `mapping-${index}`,
+      sourceColumn: m2.sourceColumn,
+      outputName: m2.targetColumn,
+      order: index
+    }));
+    const result = validateMappings(
+      columnMappings,
+      sourceHeaders,
+      targetHeaders,
+      requiredColumns
+    );
+    if (!canConfirmMappings(result)) {
+      setValidationResult(result);
+      return;
+    }
+    onConfirm(columnMappings);
+  }, [mappings, onConfirm, sourceHeaders, targetHeaders, requiredColumns]);
+  const handleReset = reactExports.useCallback(() => {
+    setMappings([]);
+  }, []);
+  reactExports.useCallback((sourceColumn) => {
+    const mapping = mappings.find((m2) => m2.sourceColumn === sourceColumn);
+    return mapping?.targetColumn ?? null;
+  }, [mappings]);
+  reactExports.useCallback((targetColumn) => {
+    return mappings.some((m2) => m2.targetColumn === targetColumn);
+  }, [mappings]);
+  const isRequiredColumn = reactExports.useCallback((targetColumn) => {
+    return requiredColumns.includes(targetColumn);
+  }, [requiredColumns]);
+  const isRequiredMapped = reactExports.useCallback((targetColumn) => {
+    if (!isRequiredColumn(targetColumn)) return true;
+    return mappings.some((m2) => m2.targetColumn === targetColumn);
+  }, [mappings, isRequiredColumn]);
+  const handleTargetKeyDown = reactExports.useCallback((e, targetColumn) => {
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      const availableSources2 = sourceHeaders.filter((s) => !mappings.some((m2) => m2.sourceColumn === s));
+      if (availableSources2.length > 0) {
+        handleTargetSelect(availableSources2[0], targetColumn);
+      }
+    } else if (e.key === "ArrowDown") {
+      e.preventDefault();
+      const targetIndex = targetHeaders.indexOf(targetColumn);
+      if (targetIndex < targetHeaders.length - 1) {
+        setFocusedTarget(targetHeaders[targetIndex + 1]);
+        targetColumnRefs.current.get(targetHeaders[targetIndex + 1])?.focus();
+      }
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      const targetIndex = targetHeaders.indexOf(targetColumn);
+      if (targetIndex > 0) {
+        setFocusedTarget(targetHeaders[targetIndex - 1]);
+        targetColumnRefs.current.get(targetHeaders[targetIndex - 1])?.focus();
+      }
+    }
+  }, [targetHeaders, sourceHeaders, mappings, handleTargetSelect]);
+  if (!visible) {
+    return /* @__PURE__ */ jsxRuntimeExports.jsx(jsxRuntimeExports.Fragment, {});
+  }
+  const availableSources = sourceHeaders.filter((s) => !mappings.some((m2) => m2.sourceColumn === s));
+  const mappedSources = sourceHeaders.filter((s) => mappings.some((m2) => m2.sourceColumn === s));
+  return /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: styles$5.overlay, onClick: onCancel, children: /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: styles$5.dialog, onClick: (e) => e.stopPropagation(), children: [
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: styles$5.header, children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx("h2", { style: styles$5.title, children: "手动列名映射" }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx("button", { style: styles$5.closeBtn, onClick: onCancel, "aria-label": "关闭", children: "✕" })
+    ] }),
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: styles$5.hint, children: [
+      "将左侧源列拖拽到目标列，或点击目标列选择源列进行映射。带 ",
+      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: styles$5.requiredStar, children: "*" }),
+      " 的列为必需列。",
+      !validationResult.isValid && /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: styles$5.validationError, children: validationResult.errors.map((error, index) => /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: styles$5.errorItem, children: error.message }, index)) })
+    ] }),
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: styles$5.content, children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: styles$5.column, children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsx("h3", { style: styles$5.columnTitle, children: "源列（文件列名）" }),
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: styles$5.columnContent, children: [
+          mappedSources.length > 0 && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: styles$5.section, children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: styles$5.sectionLabel, children: "已映射" }),
+            mappedSources.map((source) => {
+              const mapping = mappings.find((m2) => m2.sourceColumn === source);
+              return /* @__PURE__ */ jsxRuntimeExports.jsxs(
+                "div",
+                {
+                  ref: (el2) => {
+                    if (el2) sourceColumnRefs.current.set(source, el2);
+                  },
+                  style: {
+                    ...styles$5.sourceItem,
+                    ...styles$5.mappedItem,
+                    opacity: draggedSource === source ? 0.5 : 1
+                  },
+                  draggable: true,
+                  onDragStart: () => handleDragStart(source),
+                  onDragEnd: handleDragEnd,
+                  tabIndex: 0,
+                  role: "listitem",
+                  children: [
+                    /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: styles$5.dragHandle, children: "⋮⋮" }),
+                    /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: styles$5.sourceName, children: source }),
+                    /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: styles$5.arrow, children: "→" }),
+                    /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: styles$5.mappedTarget, children: mapping?.targetColumn }),
+                    /* @__PURE__ */ jsxRuntimeExports.jsx(
+                      "button",
+                      {
+                        style: styles$5.removeBtn,
+                        onClick: () => handleRemoveMapping(source),
+                        "aria-label": `移除${source}的映射`,
+                        children: "✕"
+                      }
+                    )
+                  ]
+                },
+                source
+              );
+            })
+          ] }),
+          availableSources.length > 0 && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: styles$5.section, children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: styles$5.sectionLabel, children: "未映射" }),
+            availableSources.map((source) => /* @__PURE__ */ jsxRuntimeExports.jsxs(
+              "div",
+              {
+                ref: (el2) => {
+                  if (el2) sourceColumnRefs.current.set(source, el2);
+                },
+                style: {
+                  ...styles$5.sourceItem,
+                  opacity: draggedSource === source ? 0.5 : 1
+                },
+                draggable: true,
+                onDragStart: () => handleDragStart(source),
+                onDragEnd: handleDragEnd,
+                tabIndex: 0,
+                role: "listitem",
+                children: [
+                  /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: styles$5.dragHandle, children: "⋮⋮" }),
+                  /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: styles$5.sourceName, children: source })
+                ]
+              },
+              source
+            ))
+          ] }),
+          sourceHeaders.length === 0 && /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: styles$5.emptyHint, children: "无源列" })
+        ] })
+      ] }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: styles$5.divider, children: /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: styles$5.dividerLine }) }),
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: styles$5.column, children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsx("h3", { style: styles$5.columnTitle, children: "目标列（期望列名）" }),
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: styles$5.columnContent, children: [
+          targetHeaders.map((target) => {
+            const isMapped = mappings.some((m2) => m2.targetColumn === target);
+            const mappedSource = mappings.find((m2) => m2.targetColumn === target)?.sourceColumn;
+            const isRequired = isRequiredColumn(target);
+            const hasRequiredError = !isRequiredMapped(target) && isRequired;
+            return /* @__PURE__ */ jsxRuntimeExports.jsxs(
+              "div",
+              {
+                ref: (el2) => {
+                  if (el2) targetColumnRefs.current.set(target, el2);
+                },
+                style: {
+                  ...styles$5.targetItem,
+                  ...hasRequiredError ? styles$5.targetItemError : {},
+                  ...isMapped ? styles$5.targetItemMapped : {},
+                  ...focusedTarget === target ? styles$5.targetItemFocused : {}
+                },
+                onDragOver: (e) => {
+                  e.preventDefault();
+                  e.dataTransfer.dropEffect = "link";
+                },
+                onDrop: () => handleDrop(target),
+                onClick: () => {
+                  const select = document.getElementById(`select-${target}`);
+                  if (select) select.focus();
+                },
+                onKeyDown: (e) => handleTargetKeyDown(e, target),
+                tabIndex: 0,
+                role: "listitem",
+                "aria-label": `目标列${target}${isRequired ? "，必需" : ""}${isMapped ? `，已映射${mappedSource}` : ""}`,
+                children: [
+                  /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: styles$5.targetLabel, children: [
+                    isRequired && /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: styles$5.requiredStar, children: "*" }),
+                    /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: styles$5.targetName, children: target })
+                  ] }),
+                  isMapped ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: styles$5.mappedInfo, children: /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { style: styles$5.mappedSourceLabel, children: [
+                    "← ",
+                    mappedSource
+                  ] }) }) : (
+                    /* 下拉选择 */
+                    /* @__PURE__ */ jsxRuntimeExports.jsxs(
+                      "select",
+                      {
+                        id: `select-${target}`,
+                        style: styles$5.select,
+                        value: "",
+                        onChange: (e) => {
+                          if (e.target.value) {
+                            handleTargetSelect(e.target.value, target);
+                          }
+                        },
+                        onClick: (e) => e.stopPropagation(),
+                        children: [
+                          /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: "", children: "选择源列..." }),
+                          availableSources.map((s) => /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: s, children: s }, s)),
+                          mappedSources.filter((s) => s !== mappedSource).map((s) => /* @__PURE__ */ jsxRuntimeExports.jsxs("option", { value: s, children: [
+                            s,
+                            "（已映射）"
+                          ] }, s))
+                        ]
+                      }
+                    )
+                  ),
+                  hasRequiredError && /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: styles$5.errorHint, children: "必需列未映射" })
+                ]
+              },
+              target
+            );
+          }),
+          targetHeaders.length === 0 && /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: styles$5.emptyHint, children: "无目标列" })
+        ] })
+      ] })
+    ] }),
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: styles$5.footer, children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx("button", { style: styles$5.resetBtn, onClick: handleReset, children: "重置" }),
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: styles$5.footerRight, children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsx("button", { style: styles$5.cancelBtn, onClick: onCancel, children: "取消" }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx(
+          "button",
+          {
+            ref: confirmBtnRef,
+            style: {
+              ...styles$5.confirmBtn,
+              ...!validationResult.isValid ? styles$5.confirmBtnDisabled : {}
+            },
+            onClick: handleConfirm,
+            disabled: !validationResult.isValid,
+            children: "确认"
+          }
+        )
+      ] })
+    ] })
+  ] }) });
+}
+const styles$5 = {
+  overlay: {
+    position: "fixed",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    background: "rgba(0, 0, 0, 0.5)",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    zIndex: 1e3
+  },
+  dialog: {
+    background: "#fff",
+    borderRadius: 8,
+    width: "90vw",
+    maxWidth: 900,
+    maxHeight: "85vh",
+    display: "flex",
+    flexDirection: "column",
+    boxShadow: "0 4px 24px rgba(0, 0, 0, 0.15)"
+  },
+  header: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    padding: "16px 20px",
+    borderBottom: "1px solid #e8e8e8"
+  },
+  title: {
+    margin: 0,
+    fontSize: 18,
+    fontWeight: 600,
+    color: "#1a1a1a"
+  },
+  closeBtn: {
+    background: "none",
+    border: "none",
+    fontSize: 18,
+    cursor: "pointer",
+    color: "#8c8c8c",
+    padding: 4,
+    lineHeight: 1
+  },
+  hint: {
+    padding: "12px 20px",
+    fontSize: 13,
+    color: "#595959",
+    background: "#fafafa",
+    borderBottom: "1px solid #e8e8e8"
+  },
+  requiredStar: {
+    color: "#ff4d4f",
+    fontWeight: 600
+  },
+  content: {
+    display: "flex",
+    flex: 1,
+    overflow: "hidden",
+    minHeight: 300
+  },
+  column: {
+    flex: 1,
+    display: "flex",
+    flexDirection: "column",
+    overflow: "hidden",
+    minWidth: 0
+  },
+  columnTitle: {
+    margin: 0,
+    padding: "12px 16px",
+    fontSize: 14,
+    fontWeight: 600,
+    color: "#262626",
+    background: "#f5f5f5",
+    borderBottom: "1px solid #e8e8e8"
+  },
+  columnContent: {
+    flex: 1,
+    overflow: "auto",
+    padding: 12
+  },
+  section: {
+    marginBottom: 16
+  },
+  sectionLabel: {
+    fontSize: 12,
+    color: "#8c8c8c",
+    marginBottom: 8,
+    fontWeight: 500
+  },
+  sourceItem: {
+    display: "flex",
+    alignItems: "center",
+    gap: 8,
+    padding: "8px 12px",
+    marginBottom: 6,
+    background: "#f0f5ff",
+    borderRadius: 4,
+    border: "1px solid #d9e4ff",
+    cursor: "grab",
+    transition: "all 0.15s ease"
+  },
+  mappedItem: {
+    background: "#e6f7e6",
+    borderColor: "#b7eb8f"
+  },
+  dragHandle: {
+    color: "#8c8c8c",
+    fontSize: 14,
+    cursor: "grab",
+    userSelect: "none"
+  },
+  sourceName: {
+    flex: 1,
+    fontSize: 13,
+    color: "#262626",
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap"
+  },
+  arrow: {
+    color: "#52c41a",
+    fontSize: 14,
+    fontWeight: 600
+  },
+  mappedTarget: {
+    fontSize: 13,
+    color: "#389e0d",
+    fontWeight: 500
+  },
+  removeBtn: {
+    background: "none",
+    border: "none",
+    color: "#8c8c8c",
+    cursor: "pointer",
+    padding: 2,
+    fontSize: 12,
+    lineHeight: 1
+  },
+  divider: {
+    width: 40,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center"
+  },
+  dividerLine: {
+    width: 1,
+    height: "80%",
+    background: "#e8e8e8"
+  },
+  targetItem: {
+    display: "flex",
+    flexDirection: "column",
+    gap: 6,
+    padding: "10px 12px",
+    marginBottom: 8,
+    background: "#fff",
+    borderRadius: 4,
+    border: "1px solid #d9d9d9",
+    transition: "all 0.15s ease",
+    cursor: "pointer"
+  },
+  targetItemMapped: {
+    background: "#f6ffed",
+    borderColor: "#b7eb8f"
+  },
+  targetItemError: {
+    background: "#fff2f0",
+    borderColor: "#ffccc7"
+  },
+  targetItemFocused: {
+    borderColor: "#1677ff",
+    boxShadow: "0 0 0 2px rgba(22, 119, 255, 0.2)"
+  },
+  targetLabel: {
+    display: "flex",
+    alignItems: "center",
+    gap: 4
+  },
+  targetName: {
+    fontSize: 13,
+    fontWeight: 500,
+    color: "#262626"
+  },
+  mappedInfo: {
+    display: "flex",
+    alignItems: "center"
+  },
+  mappedSourceLabel: {
+    fontSize: 12,
+    color: "#389e0d",
+    fontWeight: 500
+  },
+  select: {
+    width: "100%",
+    padding: "4px 8px",
+    fontSize: 12,
+    borderRadius: 4,
+    border: "1px solid #d9d9d9",
+    background: "#fff"
+  },
+  errorHint: {
+    fontSize: 11,
+    color: "#cf1322"
+  },
+  emptyHint: {
+    color: "#bfbfbf",
+    fontSize: 13,
+    textAlign: "center",
+    padding: 20
+  },
+  footer: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    padding: "12px 20px",
+    borderTop: "1px solid #e8e8e8",
+    background: "#fafafa"
+  },
+  footerRight: {
+    display: "flex",
+    gap: 8
+  },
+  resetBtn: {
+    padding: "6px 14px",
+    fontSize: 13,
+    border: "1px solid #d9d9d9",
+    borderRadius: 4,
+    background: "#fff",
+    cursor: "pointer",
+    color: "#595959"
+  },
+  cancelBtn: {
+    padding: "6px 14px",
+    fontSize: 13,
+    border: "1px solid #d9d9d9",
+    borderRadius: 4,
+    background: "#fff",
+    cursor: "pointer",
+    color: "#595959"
+  },
+  confirmBtn: {
+    padding: "6px 20px",
+    fontSize: 13,
+    border: "none",
+    borderRadius: 4,
+    background: "#1677ff",
+    color: "#fff",
+    cursor: "pointer",
+    fontWeight: 500
+  },
+  confirmBtnDisabled: {
+    background: "#bfbfbf",
+    cursor: "not-allowed"
+  },
+  validationError: {
+    marginTop: 8,
+    padding: "8px 12px",
+    background: "#fff2f0",
+    borderRadius: 4,
+    border: "1px solid #ffccc7"
+  },
+  errorItem: {
+    fontSize: 12,
+    color: "#cf1322",
+    marginBottom: 4
+  }
+};
 function FilePanel({
   filePath,
   sheets,
   selectedSheet,
   sheetData,
   onFileOpen,
-  onSheetChange
+  onSheetChange,
+  onMappingsConfirm
 }) {
+  const [matchStatus, setMatchStatus] = reactExports.useState(null);
+  const [mappings, setMappings] = reactExports.useState([]);
+  const [showMappingDialog, setShowMappingDialog] = reactExports.useState(false);
+  const [isLoading, setIsLoading] = reactExports.useState(false);
+  reactExports.useEffect(() => {
+    setMappings([]);
+    setMatchStatus(null);
+    setResolvedSheetType(null);
+  }, [sheetData]);
   const previewRows = sheetData ? sheetData.rows.slice(0, 20) : [];
+  const [showSheetTypeDialog, setShowSheetTypeDialog] = reactExports.useState(false);
+  const [resolvedSheetType, setResolvedSheetType] = reactExports.useState(null);
+  const effectiveSheetName = resolvedSheetType ?? selectedSheet;
+  const shouldShowMappingDialog = reactExports.useCallback(async () => {
+    if (!filePath || !selectedSheet) return false;
+    try {
+      const hasConfig = await window.api.hasSheetConfig(selectedSheet);
+      if (!hasConfig) {
+        setShowSheetTypeDialog(true);
+        return false;
+      }
+      const expectedHeaders2 = await window.api.getExpectedHeaders(selectedSheet);
+      const matchResult = await window.api.readSheetWithMatchCheck(
+        filePath,
+        selectedSheet,
+        expectedHeaders2
+      );
+      setMatchStatus(matchResult);
+      return matchResult.needsManualMapping || matchResult.matchScore < 0.8;
+    } catch (error) {
+      console.error("匹配检查失败:", error);
+      return false;
+    }
+  }, [filePath, selectedSheet]);
+  const handleSheetTypeConfirm = reactExports.useCallback(async (sheetType) => {
+    setResolvedSheetType(sheetType);
+    setShowSheetTypeDialog(false);
+    if (!filePath || !selectedSheet) return;
+    try {
+      const expectedHeaders2 = await window.api.getExpectedHeaders(sheetType);
+      const matchResult = await window.api.readSheetWithMatchCheck(
+        filePath,
+        selectedSheet,
+        expectedHeaders2
+      );
+      setMatchStatus(matchResult);
+      if (matchResult.needsManualMapping || matchResult.matchScore < 0.8) {
+        setShowMappingDialog(true);
+      }
+    } catch (error) {
+      console.error("匹配检查失败:", error);
+    }
+  }, [filePath, selectedSheet]);
+  const handleFileImport = reactExports.useCallback(async () => {
+    setIsLoading(true);
+    try {
+      await onFileOpen();
+    } finally {
+      setIsLoading(false);
+    }
+  }, [onFileOpen]);
+  React.useEffect(() => {
+    if (sheetData && sheetData.headers.length > 0 && filePath && selectedSheet) {
+      const timer = setTimeout(async () => {
+        const shouldShow = await shouldShowMappingDialog();
+        if (shouldShow) {
+          setShowMappingDialog(true);
+        }
+      }, 100);
+      return () => clearTimeout(timer);
+    }
+  }, [sheetData?.headers, filePath, selectedSheet, shouldShowMappingDialog]);
+  const handleMappingConfirm = reactExports.useCallback((newMappings) => {
+    setMappings(newMappings);
+    setShowMappingDialog(false);
+    if (onMappingsConfirm) {
+      onMappingsConfirm(newMappings);
+    }
+  }, [onMappingsConfirm]);
+  const handleMappingCancel = reactExports.useCallback(() => {
+    setShowMappingDialog(false);
+  }, []);
+  const handleOpenMappingDialog = reactExports.useCallback(async () => {
+    if (sheetData && sheetData.headers.length > 0) {
+      const sheetName = effectiveSheetName ?? selectedSheet ?? void 0;
+      const expectedHeaders2 = await window.api.getExpectedHeaders(sheetName);
+      const matchResult = await window.api.readSheetWithMatchCheck(
+        filePath,
+        selectedSheet,
+        expectedHeaders2
+      );
+      setMatchStatus(matchResult);
+      setShowMappingDialog(true);
+    }
+  }, [filePath, selectedSheet, effectiveSheetName, sheetData]);
+  const [expectedHeaders, setExpectedHeaders] = reactExports.useState([]);
+  reactExports.useEffect(() => {
+    if (showMappingDialog && effectiveSheetName) {
+      window.api.getExpectedHeaders(effectiveSheetName).then(setExpectedHeaders);
+    }
+  }, [showMappingDialog, effectiveSheetName]);
+  const finalTargetHeaders = expectedHeaders.length > 0 ? expectedHeaders : sheetData?.headers ?? [];
+  const requiredColumns = matchStatus?.missingRequiredColumns ?? [];
   return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: styles$4.container, children: [
+    isLoading && /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: styles$4.loadingOverlay, children: /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: styles$4.loadingSpinner, children: "加载中..." }) }),
     /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: styles$4.toolbar, children: [
-      /* @__PURE__ */ jsxRuntimeExports.jsx("button", { style: styles$4.importBtn, onClick: onFileOpen, children: "📂 导入文件" }),
-      filePath && /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: styles$4.filePath, title: filePath, children: filePath.split(/[\\/]/).pop() }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx("button", { style: styles$4.importBtn, onClick: handleFileImport, disabled: isLoading, children: "📂 导入文件" }),
+      sheetData && sheetData.headers.length > 0 && /* @__PURE__ */ jsxRuntimeExports.jsx(
+        "button",
+        {
+          style: styles$4.mappingBtn,
+          onClick: handleOpenMappingDialog,
+          title: "手动调整列名映射",
+          children: "🔧 映射"
+        }
+      ),
+      filePath && /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { style: styles$4.filePath, title: filePath, children: [
+        filePath.split(/[\\/]/).pop(),
+        matchStatus && /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { style: matchStatus.matchScore >= 0.8 ? styles$4.matchGood : styles$4.matchBad, children: [
+          " ",
+          "(匹配度: ",
+          Math.round(matchStatus.matchScore * 100),
+          "%)"
+        ] })
+      ] }),
       sheets.length > 0 && /* @__PURE__ */ jsxRuntimeExports.jsx(
         "select",
         {
@@ -7094,7 +7911,58 @@ function FilePanel({
         " 行"
       ] })
     ] }),
-    !sheetData && /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: styles$4.empty, children: "请导入 .xlsx / .xls / .csv 文件" })
+    !sheetData && /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: styles$4.empty, children: "请导入 .xlsx / .xls / .csv 文件" }),
+    showSheetTypeDialog && /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: styles$4.overlay, onClick: () => setShowSheetTypeDialog(false), children: /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: styles$4.sheetTypeDialog, onClick: (e) => e.stopPropagation(), children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx("h3", { style: styles$4.sheetTypeTitle, children: "选择 Sheet 类型" }),
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("p", { style: styles$4.sheetTypeHint, children: [
+        "当前 Sheet「",
+        selectedSheet,
+        "」未识别，请指定它对应的数据类型："
+      ] }),
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: styles$4.sheetTypeBtns, children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsx(
+          "button",
+          {
+            style: styles$4.sheetTypeBtn,
+            onClick: () => handleSheetTypeConfirm("干流"),
+            children: "干流"
+          }
+        ),
+        /* @__PURE__ */ jsxRuntimeExports.jsx(
+          "button",
+          {
+            style: styles$4.sheetTypeBtn,
+            onClick: () => handleSheetTypeConfirm("支流"),
+            children: "支流"
+          }
+        )
+      ] }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx(
+        "button",
+        {
+          style: styles$4.sheetTypeCancelBtn,
+          onClick: () => setShowSheetTypeDialog(false),
+          children: "取消"
+        }
+      )
+    ] }) }),
+    /* @__PURE__ */ jsxRuntimeExports.jsx(
+      ManualMappingDialog,
+      {
+        visible: showMappingDialog,
+        sourceHeaders: sheetData?.headers ?? [],
+        targetHeaders: finalTargetHeaders,
+        presetMappings: mappings.length > 0 ? mappings : (matchStatus?.suggestedMappings ?? []).filter((m2) => m2.sourceHeader && m2.suggestedTarget && m2.confidence > 0).map((m2, i) => ({
+          id: `preset-${i}`,
+          sourceColumn: m2.sourceHeader,
+          outputName: m2.suggestedTarget,
+          order: i
+        })),
+        requiredColumns,
+        onConfirm: handleMappingConfirm,
+        onCancel: handleMappingCancel
+      }
+    )
   ] });
 }
 const styles$4 = {
@@ -7109,7 +7977,7 @@ const styles$4 = {
     borderRadius: 4,
     fontSize: 14
   },
-  filePath: { fontSize: 13, color: "#555", maxWidth: 260, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
+  filePath: { fontSize: 13, color: "#555", maxWidth: 300, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
   select: { padding: "4px 8px", fontSize: 13, borderRadius: 4, border: "1px solid #ccc" },
   tableWrapper: { overflowX: "auto", border: "1px solid #e0e0e0", borderRadius: 4 },
   table: { borderCollapse: "collapse", width: "100%", fontSize: 13 },
@@ -7118,12 +7986,105 @@ const styles$4 = {
   rowEven: { background: "#fff" },
   rowOdd: { background: "#fafafa" },
   hint: { padding: "4px 10px", fontSize: 12, color: "#888", borderTop: "1px solid #f0f0f0" },
-  empty: { color: "#aaa", fontSize: 14, padding: "20px 0", textAlign: "center" }
+  empty: { color: "#aaa", fontSize: 14, padding: "20px 0", textAlign: "center" },
+  loadingOverlay: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    background: "rgba(255,255,255,0.8)",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    zIndex: 10
+  },
+  loadingSpinner: {
+    padding: "10px 20px",
+    background: "#fff",
+    borderRadius: 4,
+    boxShadow: "0 2px 8px rgba(0,0,0,0.15)"
+  },
+  matchGood: { color: "#52c41a", fontWeight: 500 },
+  matchBad: { color: "#faad14", fontWeight: 500 },
+  mappingBtn: {
+    padding: "4px 10px",
+    cursor: "pointer",
+    background: "#fff",
+    color: "#595959",
+    border: "1px solid #d9d9d9",
+    borderRadius: 4,
+    fontSize: 13
+  },
+  overlay: {
+    position: "fixed",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    background: "rgba(0, 0, 0, 0.4)",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    zIndex: 1e3
+  },
+  sheetTypeDialog: {
+    background: "#fff",
+    borderRadius: 8,
+    padding: "24px 32px",
+    minWidth: 320,
+    boxShadow: "0 4px 24px rgba(0, 0, 0, 0.15)",
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "center",
+    gap: 16
+  },
+  sheetTypeTitle: {
+    margin: 0,
+    fontSize: 16,
+    fontWeight: 600,
+    color: "#1a1a1a"
+  },
+  sheetTypeHint: {
+    margin: 0,
+    fontSize: 13,
+    color: "#595959",
+    textAlign: "center"
+  },
+  sheetTypeBtns: {
+    display: "flex",
+    gap: 16
+  },
+  sheetTypeBtn: {
+    padding: "10px 32px",
+    fontSize: 15,
+    fontWeight: 600,
+    border: "1px solid #1677ff",
+    borderRadius: 6,
+    background: "#fff",
+    color: "#1677ff",
+    cursor: "pointer"
+  },
+  sheetTypeCancelBtn: {
+    padding: "6px 16px",
+    fontSize: 13,
+    border: "1px solid #d9d9d9",
+    borderRadius: 4,
+    background: "#fff",
+    color: "#595959",
+    cursor: "pointer"
+  }
 };
-function ExportButton({ data, resultData }) {
+function ExportButton({ data, resultData, sheetName }) {
   const [status, setStatus] = reactExports.useState("idle");
   const [message, setMessage] = reactExports.useState("");
   const [savedDir, setSavedDir] = reactExports.useState(null);
+  function generateDefaultFileName() {
+    const now = /* @__PURE__ */ new Date();
+    const timestamp = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}${String(now.getDate()).padStart(2, "0")}_${String(now.getHours()).padStart(2, "0")}${String(now.getMinutes()).padStart(2, "0")}${String(now.getSeconds()).padStart(2, "0")}`;
+    const prefix = sheetName ?? "输出";
+    return `${prefix}_${timestamp}.xlsx`;
+  }
   async function handleExport() {
     const hasMultiSheet = resultData && resultData.sheets.length > 0;
     if (!hasMultiSheet && (!data || data.rows.length === 0)) {
@@ -7135,7 +8096,7 @@ function ExportButton({ data, resultData }) {
     setMessage("");
     setSavedDir(null);
     try {
-      const filePath = await window.api.saveFile();
+      const filePath = await window.api.saveFile(generateDefaultFileName());
       if (!filePath) {
         setStatus("idle");
         return;
@@ -9389,7 +10350,10 @@ const CurveRulePanel = (props) => {
   const [selectedKey, setSelectedKey] = reactExports.useState("");
   const [newHeaders, setNewHeaders] = reactExports.useState(sheetData?.headers ?? []);
   reactExports.useEffect(() => {
-    setNewHeaders(sheetData?.headers ?? []);
+    setNewHeaders([]);
+    setPreviewRows([]);
+    setResultMap(/* @__PURE__ */ new Map());
+    setSelectedKey("");
   }, [sheetData]);
   reactExports.useEffect(() => {
     console.log("初始数据：", sheetData);
@@ -9484,16 +10448,18 @@ const CurveRulePanel = (props) => {
               break;
             }
           }
-          const finish = calculateFinish(S1, S2, B2, t2, T2);
-          const result = {
-            "距坝里程": finish,
-            "断面号": val + "处理终点",
-            "多年平均水面线": B2
-          };
-          finishList.push({
-            id: pointIndex,
-            result
-          });
+          if (S1 != null && S2 != null && t2 != null && T2 != null && pointIndex != null) {
+            const finish = calculateFinish(S1, S2, B2, t2, T2);
+            const result = {
+              "距坝里程": finish,
+              "断面号": val + "处理终点",
+              "多年平均水面线": B2
+            };
+            finishList.push({
+              id: pointIndex,
+              result
+            });
+          }
         });
         const sortedFinishList = [...finishList].sort((a, b) => Number(a.result["距坝里程"]) - Number(b.result["距坝里程"]));
         sortedFinishList.forEach((res) => {
@@ -9631,7 +10597,7 @@ const CurveRulePanel = (props) => {
         }
       )
     ] }),
-    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: styles$2.container, children: [
+    previewRows.length > 0 && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: styles$2.container, children: [
       /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: styles$2.tableWrapper, children: /* @__PURE__ */ jsxRuntimeExports.jsxs("table", { style: styles$2.table, children: [
         /* @__PURE__ */ jsxRuntimeExports.jsx("thead", { children: /* @__PURE__ */ jsxRuntimeExports.jsx("tr", { children: newHeaders?.map((h) => /* @__PURE__ */ jsxRuntimeExports.jsx("th", { style: styles$2.th, children: h }, h)) }) }),
         /* @__PURE__ */ jsxRuntimeExports.jsx("tbody", { children: previewRows.map((row, i) => /* @__PURE__ */ jsxRuntimeExports.jsx("tr", { style: i % 2 === 0 ? styles$2.rowEven : styles$2.rowOdd, children: newHeaders?.map((h) => /* @__PURE__ */ jsxRuntimeExports.jsx("td", { style: styles$2.td, children: row[h] == null ? "" : String(row[h]) }, h)) }, i)) })
@@ -9679,6 +10645,26 @@ const RulePanel = (props) => {
 const styles$1 = {
   container: { display: "flex", flexDirection: "column", gap: 16 }
 };
+function applyMappingsToSheetData(sheetData, mappings) {
+  if (mappings.length === 0) return sheetData;
+  const renameMap = /* @__PURE__ */ new Map();
+  for (const m2 of mappings) {
+    if (m2.sourceColumn && m2.outputName && m2.sourceColumn !== m2.outputName) {
+      renameMap.set(m2.sourceColumn, m2.outputName);
+    }
+  }
+  if (renameMap.size === 0) return sheetData;
+  const newHeaders = sheetData.headers.map((h) => renameMap.get(h) ?? h);
+  const newRows = sheetData.rows.map((row) => {
+    const newRow = {};
+    for (const [key, value] of Object.entries(row)) {
+      const newKey = renameMap.get(key) ?? key;
+      newRow[newKey] = value;
+    }
+    return newRow;
+  });
+  return { headers: newHeaders, rows: newRows };
+}
 function App() {
   const [filePath, setFilePath] = reactExports.useState(null);
   const [sheets, setSheets] = reactExports.useState([]);
@@ -9689,6 +10675,10 @@ function App() {
   const [mappings, setMappings] = reactExports.useState([]);
   const [filters, setFilters] = reactExports.useState([]);
   const [curveRules, setCurveRules] = reactExports.useState([]);
+  const mappedSheetData = reactExports.useMemo(() => {
+    if (!sheetData) return null;
+    return applyMappingsToSheetData(sheetData, mappings);
+  }, [sheetData, mappings]);
   const previewData = reactExports.useMemo(() => {
     if (!sheetData || mappings.length === 0) return null;
     try {
@@ -9699,6 +10689,11 @@ function App() {
   }, [sheetData, mappings, filters]);
   async function handleFileOpen() {
     setFileError(null);
+    setSheetData(null);
+    setMappings([]);
+    setFilters([]);
+    setCurveRules([]);
+    setResultData(null);
     try {
       const result = await window.api.openFile();
       if (!result) return;
@@ -9710,9 +10705,6 @@ function App() {
         const data = await window.api.readSheet(result.filePath, sheet);
         console.log("导入数据：", data);
         setSheetData(data);
-        setMappings([]);
-        setFilters([]);
-        setCurveRules([]);
       }
     } catch (err) {
       setFileError(err instanceof Error ? err.message : String(err));
@@ -9721,14 +10713,15 @@ function App() {
   async function handleSheetChange(sheet) {
     setFileError(null);
     setSelectedSheet(sheet);
+    setMappings([]);
+    setFilters([]);
+    setCurveRules([]);
+    setResultData(null);
     if (!filePath) return;
     try {
       const data = await window.api.readSheet(filePath, sheet);
       console.log("切换的sheet数据：", data);
       setSheetData(data);
-      setMappings([]);
-      setFilters([]);
-      setCurveRules([]);
     } catch (err) {
       setFileError(err instanceof Error ? err.message : String(err));
     }
@@ -9746,7 +10739,8 @@ function App() {
             selectedSheet,
             sheetData,
             onFileOpen: handleFileOpen,
-            onSheetChange: handleSheetChange
+            onSheetChange: handleSheetChange,
+            onMappingsConfirm: setMappings
           }
         ),
         fileError && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: styles.errorMsg, children: [
@@ -9759,14 +10753,14 @@ function App() {
         /* @__PURE__ */ jsxRuntimeExports.jsx(
           RulePanel,
           {
-            headers: sheetData?.headers ?? [],
+            headers: mappedSheetData?.headers ?? [],
             mappings,
             filters,
             curveRules,
             onMappingsChange: setMappings,
             onFiltersChange: setFilters,
             onCurveRulesChange: setCurveRules,
-            sheetData,
+            sheetData: mappedSheetData,
             resultData,
             setResultData
           }
@@ -9774,7 +10768,7 @@ function App() {
       ] }),
       /* @__PURE__ */ jsxRuntimeExports.jsxs("section", { style: styles.card, children: [
         /* @__PURE__ */ jsxRuntimeExports.jsx("h2", { style: styles.cardTitle, children: "3. 导出" }),
-        /* @__PURE__ */ jsxRuntimeExports.jsx(ExportButton, { data: previewData, resultData })
+        /* @__PURE__ */ jsxRuntimeExports.jsx(ExportButton, { data: previewData, resultData, sheetName: selectedSheet })
       ] })
     ] }) })
   ] });

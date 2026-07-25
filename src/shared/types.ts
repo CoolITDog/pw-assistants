@@ -512,7 +512,7 @@ export interface ElectronAPI {
    * 打开保存文件对话框，选择导出文件位置
    * @returns 保存的文件路径或 null（用户取消）
    */
-  saveFile(): Promise<string | null>
+  saveFile(defaultFileName?: string): Promise<string | null>
   
   /**
    * 导出数据到Excel文件（单工作表）
@@ -622,4 +622,79 @@ export interface ElectronAPI {
     sourceHeaders: string[], 
     templateId: string
   ): Promise<EnhancedColumnMapping[]>
+  
+  // 配置管理 - 期望列名列表
+  
+  /**
+   * 获取当前配置的期望列名列表
+   * 
+   * @returns 期望列名数组，如果未配置则返回默认列名
+   * 
+   * @remarks
+   * 期望列名用于列名匹配和映射功能。如果用户未自定义配置，
+   * 将返回工程测量常见的默认列名列表。
+   * 
+   * @example
+   * ```typescript
+   * const headers = await window.api.getExpectedHeaders();
+   * console.log('期望列名:', headers);
+   * ```
+   */
+  getExpectedHeaders(sheetName?: string): Promise<string[]>
+  
+  /**
+   * 检查指定 sheet 是否有专属的列名配置
+   * @param sheetName - sheet 名称
+   * @returns 是否有专属配置
+   */
+  hasSheetConfig(sheetName: string): Promise<boolean>
+  
+  /**
+   * 设置期望列名列表
+   * 
+   * @param headers - 新的期望列名数组
+   * @returns Promise<void>
+   * 
+   * @remarks
+   * 保存用户自定义的期望列名列表，配置会持久化保存，
+   * 应用重启后仍然有效。
+   * 
+   * @throws {Error} 如果传入的参数不是有效数组
+   * 
+   * @example
+   * ```typescript
+   * await window.api.setExpectedHeaders(['距离', '测量值', '时间']);
+   * ```
+   */
+  setExpectedHeaders(headers: string[], sheetName?: string): Promise<void>
+  
+  /**
+   * 重置期望列名列表为默认值
+   * 
+   * @returns Promise<void>
+   * 
+   * @remarks
+   * 将期望列名列表重置为系统默认的工程测量常见列名。
+   * 
+   * @example
+   * ```typescript
+   * await window.api.resetExpectedHeaders();
+   * ```
+   */
+  resetExpectedHeaders(): Promise<void>
+  
+  /**
+   * 获取默认期望列名列表
+   * 
+   * @returns 默认期望列名数组（不包含用户自定义配置）
+   * 
+   * @remarks
+   * 返回系统预设的默认列名列表，用于参考或恢复设置。
+   * 
+   * @example
+   * ```typescript
+   * const defaults = await window.api.getDefaultExpectedHeaders();
+   * ```
+   */
+  getDefaultExpectedHeaders(): Promise<string[]>
 }

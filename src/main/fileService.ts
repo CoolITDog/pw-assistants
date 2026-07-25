@@ -6,6 +6,7 @@ import type {
   MappingTemplate, 
   EnhancedColumnMapping 
 } from '../shared/types'
+import { analyzeColumnMatching, defaultMatchConfig } from '../shared/matcher'
 
 export async function openFile(): Promise<{ filePath: string; sheets: string[] } | null> {
   const result = await dialog.showOpenDialog({
@@ -160,9 +161,44 @@ export async function readSheetWithMatchCheck(
   sheetName: string, 
   expectedHeaders?: string[]
 ): Promise<MatchAnalysisResult> {
-  // TODO: 实现完整的列名匹配检查算法
-  // 目前返回一个未实现的错误，后续任务会实现完整功能
-  throw new Error('Not implemented yet: readSheetWithMatchCheck')
+  // 1. 读取文件表头数据
+  let workbook: XLSX.WorkBook
+  try {
+    workbook = XLSX.readFile(filePath)
+  } catch (err) {
+    throw new Error(`文件读取失败：${(err as Error).message}`)
+  }
+
+  const sheet = workbook.Sheets[sheetName]
+  if (!sheet) {
+    throw new Error(`Sheet "${sheetName}" 不存在`)
+  }
+
+  const aoa: unknown[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' })
+
+  if (aoa.length === 0) {
+    throw new Error('文件为空')
+  }
+
+  // 2. 检测表头行数并构建表头
+  const headerRowCount = detectHeaderRows(aoa)
+  const sourceHeaders = buildHeaders(aoa, headerRowCount)
+
+  // 3. 如果没有提供期望列名，使用源列名作为目标（用于后续映射）
+  //    实际应用中，可能需要从模板或配置中获取期望的列名
+  const targetHeaders = expectedHeaders && expectedHeaders.length > 0 
+    ? expectedHeaders 
+    : sourceHeaders
+
+  // 4. 调用匹配算法分析列名匹配情况
+  const matchResult = analyzeColumnMatching(
+    sourceHeaders,
+    targetHeaders,
+    defaultMatchConfig
+  )
+
+  // 5. 返回匹配分析结果
+  return matchResult
 }
 
 /**

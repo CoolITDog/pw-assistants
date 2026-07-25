@@ -4,14 +4,25 @@ import type { ExportData, MultiSheetExportData } from '../../../shared/types'
 interface ExportButtonProps {
   data: ExportData | null
   resultData?: MultiSheetExportData | null
+  sheetName?: string | null
 }
 
 type Status = 'idle' | 'exporting' | 'success' | 'error'
 
-export function ExportButton({ data, resultData }: ExportButtonProps): React.JSX.Element {
+export function ExportButton({ data, resultData, sheetName }: ExportButtonProps): React.JSX.Element {
   const [status, setStatus] = useState<Status>('idle')
   const [message, setMessage] = useState<string>('')
   const [savedDir, setSavedDir] = useState<string | null>(null)
+
+  /**
+   * 生成默认文件名：sheet名称_时间戳.xlsx
+   */
+  function generateDefaultFileName(): string {
+    const now = new Date()
+    const timestamp = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}_${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}${String(now.getSeconds()).padStart(2, '0')}`
+    const prefix = sheetName ?? '输出'
+    return `${prefix}_${timestamp}.xlsx`
+  }
 
   async function handleExport(): Promise<void> {
     // 优先用 resultData（多 sheet），否则降级用 data
@@ -27,7 +38,7 @@ export function ExportButton({ data, resultData }: ExportButtonProps): React.JSX
     setSavedDir(null)
 
     try {
-      const filePath = await window.api.saveFile()
+      const filePath = await window.api.saveFile(generateDefaultFileName())
       if (!filePath) {
         setStatus('idle')
         return

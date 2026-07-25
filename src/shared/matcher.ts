@@ -19,8 +19,8 @@ import type {
 export const defaultMatchConfig: MatchConfiguration = {
   autoMatch: {
     enableFuzzyMatch: true,
-    fuzzyThreshold: 0.6,
-    enableSubstringMatch: true,
+    fuzzyThreshold: 0.85,
+    enableSubstringMatch: false,
     ignoredChars: [' ', '_', '-'],
     synonymMapping: {}
   },
@@ -322,6 +322,7 @@ export function checkMissingRequiredColumns(
  * - 精确匹配的权重最高 (1.0)
  * - 模糊匹配根据置信度计算
  * - 未匹配的列会降低分数
+ * - 当所有匹配都是精确匹配时返回 1.0
  */
 export function calculateMatchScore(
   sourceCount: number,
@@ -331,14 +332,23 @@ export function calculateMatchScore(
   if (sourceCount === 0 && targetCount === 0) return 1
   if (sourceCount === 0 || targetCount === 0) return 0
 
-  // 计算精确匹配分数
+  const maxCount = Math.max(sourceCount, targetCount)
+  const matchedCount = mappings.length
+
+  // 如果所有列都有匹配且都是精确匹配，返回 1.0
   const exactMatches = mappings.filter(m => m.confidence === 1.0)
-  const exactScore = exactMatches.length / Math.max(sourceCount, targetCount)
+  const fuzzyMatches = mappings.filter(m => m.confidence < 1.0)
+
+  if (exactMatches.length === matchedCount && matchedCount === maxCount) {
+    return 1.0
+  }
+
+  // 计算精确匹配分数
+  const exactScore = exactMatches.length / maxCount
 
   // 计算模糊匹配分数（考虑置信度）
-  const fuzzyMatches = mappings.filter(m => m.confidence < 1.0)
   const fuzzyScore = fuzzyMatches.length > 0
-    ? fuzzyMatches.reduce((sum, m) => sum + m.confidence, 0) / Math.max(sourceCount, targetCount)
+    ? fuzzyMatches.reduce((sum, m) => sum + m.confidence, 0) / maxCount
     : 0
 
   // 综合分数：精确匹配占 70%，模糊匹配占 30%

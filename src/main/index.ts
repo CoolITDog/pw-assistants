@@ -10,6 +10,13 @@ import {
   applyMappingTemplate
 } from './fileService'
 import { saveFile, exportExcel, exportMultiSheet, openDirectory } from './exportService'
+import { 
+  getExpectedHeaders, 
+  setExpectedHeaders, 
+  resetExpectedHeaders,
+  getDefaultExpectedHeaders,
+  hasSheetConfig
+} from './configService'
 import type { ExportData, MultiSheetExportData, MatchAnalysisResult, MappingTemplate, EnhancedColumnMapping } from '../shared/types'
 
 function createWindow(): void {
@@ -44,6 +51,7 @@ function createWindow(): void {
 }
 
 function registerIpcHandlers(): void {
+  // 文件操作
   ipcMain.handle('file:open', () => openFile())
   ipcMain.handle('file:readSheet', (_event, filePath: string, sheetName: string) =>
     readSheet(filePath, sheetName)
@@ -61,7 +69,18 @@ function registerIpcHandlers(): void {
   ipcMain.handle('file:applyMappingTemplate', (_event, sourceHeaders: string[], templateId: string) =>
     applyMappingTemplate(sourceHeaders, templateId)
   )
-  ipcMain.handle('export:saveFile', () => saveFile())
+  
+  // 配置管理 - 期望列名
+  ipcMain.handle('config:getExpectedHeaders', (_event, sheetName?: string) => getExpectedHeaders(sheetName))
+  ipcMain.handle('config:hasSheetConfig', (_event, sheetName: string) => hasSheetConfig(sheetName))
+  ipcMain.handle('config:setExpectedHeaders', (_event, headers: string[], sheetName?: string) => 
+    setExpectedHeaders(headers, sheetName)
+  )
+  ipcMain.handle('config:resetExpectedHeaders', () => resetExpectedHeaders())
+  ipcMain.handle('config:getDefaultExpectedHeaders', () => getDefaultExpectedHeaders())
+  
+  // 导出操作
+  ipcMain.handle('export:saveFile', (_event, defaultFileName?: string) => saveFile(defaultFileName))
   ipcMain.handle('export:excel', (_event, filePath: string, data: ExportData) =>
     exportExcel(filePath, data)
   )

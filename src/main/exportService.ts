@@ -3,10 +3,10 @@ import ExcelJS from 'exceljs'
 import { dirname } from 'path'
 import type { ExportData, MultiSheetExportData } from '../shared/types'
 
-export async function saveFile(): Promise<string | null> {
+export async function saveFile(defaultFileName?: string): Promise<string | null> {
   const result = await dialog.showSaveDialog({
     title: '保存导出文件',
-    defaultPath: 'output.xlsx',
+    defaultPath: defaultFileName ?? 'output.xlsx',
     filters: [{ name: 'Excel 文件', extensions: ['xlsx'] }]
   })
 
