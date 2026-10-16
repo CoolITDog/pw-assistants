@@ -10393,7 +10393,9 @@ const CurveRulePanel = (props) => {
           }
           let index = 0;
           for (var i = 0; i < spliceArr.length - 1; i++) {
-            if (spliceArr[i] < 0.3 && spliceArr[i + 1] > 0.3 || spliceArr[i] > 0.3 && spliceArr[i + 1] < 0.3) {
+            const d0 = spliceArr[i] - 0.3;
+            const d1 = spliceArr[i + 1] - 0.3;
+            if (d0 === 0 || d1 === 0 || d0 < 0 && d1 > 0 || d0 > 0 && d1 < 0) {
               index = i + 1;
               break;
             }

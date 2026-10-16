@@ -85,9 +85,18 @@ const CurveRulePanel:FC<CurveRulePanelProps>= (props) => {
             }
           }
           // 2.查找0.3的区间位置 （是否存在多个0.3的区间）
+          // 以差值相对 0.3 的符号变化判断穿越：d[i] = 差值 - 0.3
+          // index 表示"回水末端的后一个断面"下标，calculateEnd 在 [index-1, index] 区间内插值求末端。
+          // 注意：当某个采样点差值"正好等于 0.3"时，该点本身就是回水末端边界，必须命中。
+          // 旧实现用严格 < / > 比较会漏判这种情况，导致后续末端/终点/淹没线全部不计算，
+          // 表现为"点计算没有反应"。此处把"正好等于 0.3"并入穿越判断。
           let index: number = 0;
           for(var i =0; i<spliceArr.length-1; i++){
-            if((spliceArr[i] < 0.3 && spliceArr[i+1] >0.3) || (spliceArr[i] > 0.3 && spliceArr[i+1] <0.3)){
+            const d0 = spliceArr[i] - 0.3;
+            const d1 = spliceArr[i+1] - 0.3;
+            // 任一端点正好落在 0.3，或两端一正一负（区间跨越 0.3），都视为穿越，
+            // 统一取后一个断面 i+1 作为末端边界（保证 index-1 >= 0，区间有效）。
+            if(d0 === 0 || d1 === 0 || (d0 < 0 && d1 > 0) || (d0 > 0 && d1 < 0)){
               index = i+1;
               break;
             }
